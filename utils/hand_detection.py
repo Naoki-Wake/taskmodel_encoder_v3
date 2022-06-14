@@ -311,12 +311,17 @@ def run_allframe(mp4path, json_send, output_dir):
 
 def run_image(frame_img):
     with tempfile.TemporaryDirectory() as output_dir:
+        # print(output_dir+ "in run_iamge")
         fp_tmp_img = os.path.join(output_dir, 'tmp.png')
         cv2.imwrite(fp_tmp_img, frame_img)
 
         fp_tmp_out = os.path.join(output_dir, 'tmp.json')
         response = upload_data_image(fp_tmp_img)
         data = response.content
+        if data == b'Internal Server Error':
+            # quit the program
+            raise Exception('Internal Server Error')
+
         with open(fp_tmp_out, 'wb') as s:
             s.write(data)
         with open(fp_tmp_out) as json_file:

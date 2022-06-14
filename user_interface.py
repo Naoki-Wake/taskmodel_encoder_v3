@@ -10,6 +10,7 @@ import glob
 import open3d as o3d
 import utils.mkv2mp4 as mkv2mp4
 import utils.video_segmentator as video_segmentator
+import utils.action_recognizer as action_recognizer
 import utils.task_recognizer as task_recognizer
 import utils.task_compiler as task_compiler
 import utils.speech_recognizer as speech_recognizer
@@ -384,7 +385,7 @@ if __name__ == '__main__':
         os.getcwd(),
         output_dir_name_root,
         filename_mkv.split('.')[0],
-        'task_recognition')
+        'task_recognition_v3')
     output_dir_daemon = os.path.join(
         os.getcwd(),
         output_dir_name_root,
@@ -434,7 +435,7 @@ if __name__ == '__main__':
         timeparts_sec.append(
             (segment_timings_sec[i], segment_timings_sec[i + 1]))
     print('done')
-#    import pdb ; pdb.set_trace()
+
     # split videos based on timepart
     print('splitting videos...')
     if debug:
@@ -446,8 +447,6 @@ if __name__ == '__main__':
         ret, frame = cap.read()
         h, w, _ = frame.shape
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        # print(timeparts_frame)
-        # print(output_dir)
         fp_splitvideo = [
             os.path.join(
                 output_dir,
@@ -455,7 +454,6 @@ if __name__ == '__main__':
             end in timeparts_frame]
         writers = [cv2.VideoWriter(fp_tmp, fourcc, 30.0, (w, h))
                    for fp_tmp in fp_splitvideo]
-        # print(fp_splitvideo)
         f = 0
         while ret:
             f += 1
@@ -470,27 +468,138 @@ if __name__ == '__main__':
     print('done')
 #    import pdb ; pdb.set_trace()
     # audio file
-    print('analyzing audios...')
-    audio_data = {}
-    transcript = []
+    # TODO: obtain object name and task cohesion
+    # print('analyzing audios...')
+    # audio_data = {}
+    # transcript = []
+# 
+    # if fp_audio is not None:
+    #     if debug:
+    #         fp_text = os.path.join(
+    #             output_dir,
+    #             'speech_recognized',
+    #             'transcript.json')
+    #         if not os.path.exists(fp_text):
+    #             debug = False
+    #     if not debug:
+    #         fp_text = speech_recognizer.run(
+    #             fp_audio, fp_segmentation, output_dir)
+    #     if os.path.exists(fp_text):
+    #         with open(fp_text, 'r') as f:
+    #             audio_data = json.load(f)
+    #             transcript = audio_data['recognized_text']
+    # print('done')
 
-    if fp_audio is not None:
-        if debug:
-            fp_text = os.path.join(
-                output_dir,
-                'speech_recognized',
-                'transcript.json')
-            if not os.path.exists(fp_text):
-                debug = False
-        if not debug:
-            fp_text = speech_recognizer.run(
-                fp_audio, fp_segmentation, output_dir)
-        if os.path.exists(fp_text):
-            with open(fp_text, 'r') as f:
-                audio_data = json.load(f)
-                transcript = audio_data['recognized_text']
+    # obtain action recognition results
+    print('obtaining action recognition results...')
+    if debug:
+        fp_task_recognized = os.path.join(
+            output_dir, 'task_recognized.json')
+        if not os.path.exists(fp_task_recognized):
+            debug = False
+    if not debug:
+        # action recognition result (grasp/release detection)
+        async def run_graspreleasedetection(loop, fp_list):
+            sem = asyncio.Semaphore(8)
+
+            async def run_request(fp):
+                async with sem:
+                    return await loop.run_in_executor(None, action_recognizer.run_grasp_v1, fp)
+            predicts_list = [run_request(fp) for fp in fp_list]
+            return await asyncio.gather(*predicts_list)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        grasprelease_by_action_recognition = loop.run_until_complete(run_graspreleasedetection(loop, fp_splitvideo))
+        print('obtaining action recognition result (grasp/release detection)...')
+        # import pdb ; pdb.set_trace()
+        # check if grasp/release detection is correct
+        # TODO may be through UI
+
+        # obtain action recognition result (description)
+        target_object_name = 'box'
+        transcript_by_action_recognition = []
+        for item, grasprelease in zip(fp_splitvideo, grasprelease_by_action_recognition):
+            if grasprelease == 'in_manipulation':
+                #description = action_recognizer.run_video_tsm_v1(item, scale=0.5)
+                description = action_recognizer.run_video_tsm_v1(item, crop=True)
+                # replace 'something' with the name of object
+                description = description.replace('_', ' ')
+                description = description.replace('something', target_object_name)
+                description = description.replace('things', target_object_name)
+                transcript_by_action_recognition.append(description)
+            else:
+                transcript_by_action_recognition.append(grasprelease)
+        dump = {}
+        dump['recognized_text'] = transcript_by_action_recognition
+        dump['fp_video'] = fp_splitvideo
+        dump['segment_timings_frame'] = timeparts_frame
+        dump['segment_timings_sec'] = timeparts_sec
+        fp_by_action_recognition = os.path.join(
+            output_dir, "transcript_by_action_recognition.json")
+        with open(fp_by_action_recognition, 'w') as f:
+            json.dump(dump, f, indent=4)
+
+        #  recognize tasks
+        print('recognizing tasks...')
+        fp_task_recognized = task_recognizer.run_modelbased(
+            fp_by_action_recognition, output_dir, version='v3')
+        hand_laterality = ''
+    with open(fp_task_recognized, 'r') as f:
+        task_recognized = json.load(f)
+
+    # Write the result of segmentation before user's confirmation
+    print('writing video (before check)...')
+    parts_confirmed = task_recognized['segment_timings_frame']
+    parts_task = task_recognized['recognized_tasks']
+    parts_recognized_desctoption = task_recognized['recognized_text']
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    cap = cv2.VideoCapture(fp_mp4)
+    ret, frame = cap.read()
+    h, w, _ = frame.shape
+    writer = cv2.VideoWriter(
+        os.path.join(
+            output_dir, 'result_with_automated_caption.mp4'), fourcc, 30.0, (w, h))
+    f = 0
+    while ret:
+        f += 1
+        currentseg = None
+        for i, part in enumerate(parts_confirmed):
+            start, end = part
+            if start <= f <= end:
+                currentseg = i
+        # draw currentseg info to the frame
+        if currentseg is not None:
+            # font size = 5
+            cv2.putText(
+                frame,
+                f'{parts_task[currentseg]}',
+                (10,
+                    60),
+                cv2.FONT_HERSHEY_COMPLEX_SMALL,
+                4,
+                color=(
+                    30,
+                    30,
+                    255),
+                thickness=4)
+            cv2.putText(
+                frame,
+                f'{parts_recognized_desctoption[currentseg]}',
+                (10,
+                    120),
+                cv2.FONT_HERSHEY_COMPLEX_SMALL,
+                2,
+                color=(
+                    30,
+                    30,
+                    255),
+                thickness=4)
+        writer.write(frame)
+        ret, frame = cap.read()
+    writer.release()
+    cap.release()
     print('done')
-#    import pdb ; pdb.set_trace()
+
     # confirm the verbal input
     print('confirming the verbal input...')
     transcript_confirmed = []
@@ -502,8 +611,7 @@ if __name__ == '__main__':
     if not debug:
         for i, fp_video_item in enumerate(fp_splitvideo):
             transcript_item = ""
-            if i < len(transcript):
-                transcript_item = transcript[i]
+            transcript_item = parts_task[i] + ':' + parts_recognized_desctoption[i]
             confirmed_transcript_item = Main(
                 fp_video_item, transcript_item).run()
             transcript_confirmed.append(confirmed_transcript_item)

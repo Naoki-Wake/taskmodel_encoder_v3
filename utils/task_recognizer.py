@@ -11,8 +11,11 @@ import tempfile
 #     return response
 
 
-def upload_data_modelbased(upload_json):
-    url = 'http://20.109.51.15:8082/text_based_taskrecognition_modelbased'
+def upload_data_modelbased(upload_json, version='v1'):
+    if version == 'v1':
+        url = 'http://20.109.51.15:8082/text_based_taskrecognition_modelbased'
+    if version == 'v3':
+        url = 'http://20.109.51.15:8082/text_based_taskrecognition_modelbased_v3'
     headers = {'accept': 'application/json'}
     data = {'upload_json': open(upload_json, 'rb')}
     response = requests.post(url, headers=headers,
@@ -47,9 +50,9 @@ def run(fp_task_json, output_dir):
     return fp_tmp_json
 
 
-def run_modelbased(fp_task_json, output_dir):
+def run_modelbased(fp_task_json, output_dir, version='v1'):
     fp_tmp_json = os.path.join(output_dir, 'task_recognized.json')
-    response = upload_data_modelbased(fp_task_json)
+    response = upload_data_modelbased(fp_task_json, version=version)
     data = response.content
     with open(fp_tmp_json, 'wb') as s:
         s.write(data)
