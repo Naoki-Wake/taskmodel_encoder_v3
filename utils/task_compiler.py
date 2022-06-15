@@ -538,7 +538,7 @@ class task_daemon:
                 if self.taskmodel_json[param_name]["value"] is None:
                     print("filling hand laterality...")
                     self.taskmodel_json[param_name]["value"] = self.hand_laterality
-            if "direction" in param_name:
+            if "detach_direction" in param_name or "approach_direction" in param_name:
                 if self.taskmodel_json[param_name]["value"] is None:
                     print("filling direction...")
                     self.taskmodel_json[param_name]["value"] = self.hand_direction
